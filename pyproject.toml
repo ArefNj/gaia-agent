@@ -1,0 +1,28 @@
+[project]
+name = "gaia-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "aref", email = "aref.najmaddini@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "litellm>=1.102.1",
+    "llama-index>=0.14.25",
+    "marimo>=0.24.2",
+    "openai-whisper>=20250625",
+    "openpyxl>=3.1.5",
+    "pandas>=3.0.6",
+    "python-chess>=1.999",
+    "python-dotenv>=1.2.3",
+    "requests>=2.34.2",
+    "youtube-transcript-api>=1.2.4",
+]
+
+[project.scripts]
+gaia-agent = "gaia_agent:main"
+
+[build-system]
+requires = ["uv_build>=0.12.18,<0.13.0"]
+build-backend = "uv_build"
