@@ -5,8 +5,12 @@ import requests
 from bs4 import BeautifulSoup
 from ddgs import DDGS
 from markdownify import markdownify as to_markdown
+import pymupdf
+import pymupdf4llm
 
 import dotenv
+
+from src.tools.base import make_tool as _tool
 
 EMAIL = dotenv.dotenv_values().get("EMAIL", "")
 HEADERS = {
@@ -31,8 +35,16 @@ def _html_to_markdown(html: str, keep_links: bool = True) -> str:
         for el in soup.select(selector):
             el.decompose()
     strip = ["img"] if keep_links else ["img", "a"]
-    text = to_markdown(str(soup.body or soup), heading_style="ATX", strip=strip)
+    try:
+        text = to_markdown(str(soup.body or soup), heading_style="ATX", strip=strip)
+    except RecursionError:
+        text = soup.get_text("\n")
     return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+# ---------- PDF -> markdown (lossless) ----------
+def _pdf_to_markdown(data: bytes) -> str:
+    doc = pymupdf.open(stream=data, filetype="pdf")
+    return pymupdf4llm.to_markdown(doc)
 
 
 # ---------- local extractor (gemma3:4b via Ollama) ----------
@@ -175,27 +187,44 @@ def _fetch_wikipedia_html(title: str, date: str = "") -> str:
     return data["parse"]["text"]
 
 
+SEARCH_ATTEMPTS = [{}, {"backend": "bing"}, {"backend": "brave"}]
+
+
 def web_search(query: str, max_results: int = 5) -> str:
-    """Search the web and return titles, URLs and snippets."""
-    try:
-        results = DDGS().text(query, max_results=max_results)
-    except Exception as e:
-        return f"Search failed: {e}"
-    if not results:
-        return "No results found."
-    return "\n\n".join(
-        f"[{i}] {r['title']}\n    URL: {r['href']}\n    {r['body']}" for i, r in enumerate(results, 1)
-    )
+    """Search the web and return titles, URLs and snippets (retries with other backends)."""
+    max_results = min(max_results, 6)
+    last_error = "No results found."
+    for extra in SEARCH_ATTEMPTS:
+        try:
+            results = DDGS().text(query, max_results=max_results + 4, **extra)
+        except Exception as e:
+            last_error = str(e) or type(e).__name__
+            continue
+        results = [r for r in results if "aclick" not in r.get("href", "")][:max_results]
+        if results:
+            return "\n\n".join(
+                f"[{i}] {r['title']}\n    URL: {r['href']}\n    {r['body'][:300]}"
+                for i, r in enumerate(results, 1)
+            )
+    return f"Search failed: {last_error}. Try rephrasing with fewer quotes or different keywords."
 
 
 def read_webpage(url: str, question: str) -> str:
-    """Fetch a web page and return only the parts relevant to `question`."""
+    """Fetch a web page or PDF and return only the parts relevant to `question`."""
+    if "youtube.com" in url or "youtu.be" in url:
+        return "YouTube pages cannot be read with this tool. Videos need a dedicated video tool; do not retry this URL."
     try:
-        resp = requests.get(url, timeout=20, headers=HEADERS)
+        resp = requests.get(url, timeout=30, headers=HEADERS)
         resp.raise_for_status()
     except Exception as e:
         return f"Failed to fetch page: {e}"
-    return _extract_relevant(_html_to_markdown(resp.text, keep_links=True), question)
+
+    is_pdf = "pdf" in resp.headers.get("Content-Type", "").lower() or url.lower().split("?")[0].endswith(".pdf")
+    try:
+        text = _pdf_to_markdown(resp.content) if is_pdf else _html_to_markdown(resp.text, keep_links=True)
+    except Exception as e:
+        return f"Failed to parse content: {type(e).__name__}: {e}"
+    return _extract_relevant(text, question)
 
 
 def read_wikipedia(title: str, question: str, date: str = "") -> str:
@@ -208,20 +237,6 @@ def read_wikipedia(title: str, question: str, date: str = "") -> str:
 
 
 # ---------- tool registration ----------
-
-def _tool(name: str, description: str, properties: dict, required: list, func) -> dict:
-    return {
-        "schema": {
-            "type": "function",
-            "function": {
-                "name": name,
-                "description": description,
-                "parameters": {"type": "object", "properties": properties, "required": required},
-            },
-        },
-        "func": func,
-    }
-
 
 WEB_TOOLS = [
     _tool(
