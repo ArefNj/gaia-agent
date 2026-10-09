@@ -11,6 +11,7 @@ from pathlib import Path
 from src.tools.files import FILE_TOOLS
 from src.tools.audio import AUDIO_TOOLS
 from src.store import save_answer
+from src.store import BAD_ANSWERS, load_answers, save_answer
 
 def build_prompt(question: dict, file_path, file_missing: bool = False) -> str:
     if file_path is not None:
@@ -44,13 +45,22 @@ def main():
     parser.add_argument("--refresh", action="store_true", help="Re-download the question list")
     parser.add_argument("--quiet", action="store_true", help="Hide per-step tool logs")
     parser.add_argument("--preview", type=int, default=200, help="Characters of each tool result to print")
+    parser.add_argument("--missing", action="store_true", help="Skip questions that already have a good stored answer")
     args = parser.parse_args()
 
     questions = get_questions(refresh=args.refresh)
     agent = Agent(tools=WEB_TOOLS + FILE_TOOLS + AUDIO_TOOLS)
     results = []
-
+    
+    done = (
+        {tid for tid, ans in load_answers().items() if ans.strip().upper() not in BAD_ANSWERS}
+        if args.missing else set()
+    )
+    
     for idx, q in select_questions(questions, args.only, args.limit, args.skip_files):
+        if q["task_id"] in done:
+            print(f"Question {idx}: skipped (already answered)")
+            continue
         print(f"\n=== Question {idx}/{len(questions)} [{q['task_id'][:8]}] level={q.get('Level')} ===")
         print(q["question"][:300])
 

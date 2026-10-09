@@ -7,6 +7,7 @@ load_dotenv()
 
 import logging
 import litellm
+import time
 
 litellm.suppress_debug_info = True
 for _name in ("LiteLLM Router", "LiteLLM"):
@@ -69,3 +70,20 @@ def ask(messages: list[dict], **kwargs) -> str:
     """
     response = router.completion(model="primary", messages=messages, **kwargs)
     return response.choices[0].message.content
+
+def _is_rate_limit(error: Exception) -> bool:
+    text = f"{type(error).__name__} {error}".lower()
+    return any(s in text for s in ("ratelimit", "rate limit", "no deployments available", "429", "overloaded"))
+
+
+def complete(**kwargs):
+    """router.completion that waits and retries when every deployment is rate limited."""
+    waits = [20, 45, 60, 90]
+    for attempt, wait in enumerate(waits + [None], 1):
+        try:
+            return router.completion(**kwargs)
+        except Exception as e:
+            if wait is None or not _is_rate_limit(e):
+                raise
+            print(f"    [rate limit] all deployments busy, waiting {wait}s (retry {attempt}/{len(waits)})")
+            time.sleep(wait)

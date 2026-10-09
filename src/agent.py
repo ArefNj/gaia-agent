@@ -1,7 +1,9 @@
 # src/agent.py
 import json
 from src.llm_router import router
+from src.llm_router import complete
 import re
+import inspect
 
 SYSTEM_PROMPT = """You are a general-purpose AI agent answering benchmark questions.
 Rules:
@@ -21,6 +23,7 @@ Rules:
 13. For an attached .py file, always run it with run_python(file_path=...). Never retype its code.
 14. If a local audio file path is given in the question, transcribe it with transcribe_audio first and never answer from memory.
 15. If you cannot find the answer after trying different approaches, reply FINAL ANSWER: UNKNOWN. Never invent an answer.
+16. For ingredient lists, copy each ingredient exactly as spoken, including descriptive adjectives such as "ripe".
 """
 
 
@@ -53,6 +56,26 @@ def _clean_assistant_message(message) -> dict:
             for call in message.tool_calls
         ]
     return cleaned
+
+KEEP_FULL_TOOL_RESULTS = 2
+OLD_TOOL_RESULT_CHARS = 1200
+
+
+def _trim_history(messages: list[dict]) -> None:
+    """Shrink all but the most recent tool results to save tokens (in place)."""
+    tool_idx = [i for i, m in enumerate(messages) if m["role"] == "tool"]
+    for i in tool_idx[:-KEEP_FULL_TOOL_RESULTS]:
+        content = messages[i]["content"]
+        if len(content) > OLD_TOOL_RESULT_CHARS:
+            messages[i]["content"] = content[:OLD_TOOL_RESULT_CHARS] + "\n...[older tool output truncated]"
+
+
+def _filter_args(func, args: dict) -> dict:
+    """Drop arguments the tool does not accept (models sometimes invent parameters)."""
+    params = inspect.signature(func).parameters
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return args
+    return {k: v for k, v in args.items() if k in params}
 
 class Agent:
     def __init__(self, tools: list | None = None):

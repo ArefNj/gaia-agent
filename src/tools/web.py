@@ -19,9 +19,9 @@ HEADERS = {
 WIKI_API = "https://en.wikipedia.org/w/api.php"
 
 
-DIRECT_CHARS = 8000        # pages shorter than this are returned as-is
+DIRECT_CHARS = 6000        # pages shorter than this are returned as-is
 CHUNK_CHARS = 6000         # chunk size sent to the local extractor
-MAX_OUTPUT_CHARS = 8000    # cap on what the main agent receives
+MAX_OUTPUT_CHARS = 6000    # cap on what the main agent receives
 
 # ---------- HTML -> markdown (lossless) ----------
 
@@ -37,6 +37,7 @@ def _html_to_markdown(html: str, keep_links: bool = True) -> str:
     strip = ["img"] if keep_links else ["img", "a"]
     try:
         text = to_markdown(str(soup.body or soup), heading_style="ATX", strip=strip)
+        text = re.sub(r"\\\(\s*\\(?:new|renew)command.*?\\\)", "", text)
     except RecursionError:
         text = soup.get_text("\n")
     return re.sub(r"\n{3,}", "\n\n", text).strip()
@@ -130,6 +131,14 @@ def _llm_pick(units: list[dict], question: str) -> list[int]:
     nums = [int(n) for n in re.findall(r"\d+", answer)]
     return [n for n in nums if 1 <= n <= len(units)][:4]
 
+BLOCKED_URL_PARTS = (
+    "crossword", "wordplays.com",
+    "huggingface.co/datasets/gaia-benchmark", "huggingface.co/spaces",
+)
+
+
+def _is_blocked(url: str) -> bool:
+    return any(part in url.lower() for part in BLOCKED_URL_PARTS)
 
 def _extract_relevant(text: str, question: str) -> str:
     if len(text) <= DIRECT_CHARS:
@@ -200,7 +209,10 @@ def web_search(query: str, max_results: int = 5) -> str:
         except Exception as e:
             last_error = str(e) or type(e).__name__
             continue
-        results = [r for r in results if "aclick" not in r.get("href", "")][:max_results]
+        results = [
+            r for r in results
+            if "aclick" not in r.get("href", "") and not _is_blocked(r.get("href", ""))
+        ][:max_results]
         if results:
             return "\n\n".join(
                 f"[{i}] {r['title']}\n    URL: {r['href']}\n    {r['body'][:300]}"
@@ -213,6 +225,8 @@ def read_webpage(url: str, question: str) -> str:
     """Fetch a web page or PDF and return only the parts relevant to `question`."""
     if "youtube.com" in url or "youtu.be" in url:
         return "YouTube pages cannot be read with this tool. Videos need a dedicated video tool; do not retry this URL."
+    if _is_blocked(url):
+        return "This source is blocked because it mirrors benchmark questions or answers. Use a primary source."
     try:
         resp = requests.get(url, timeout=30, headers=HEADERS)
         resp.raise_for_status()
