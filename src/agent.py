@@ -19,6 +19,8 @@ Rules:
 11. If a publisher site blocks you (captcha, 403), look for the arXiv version of the paper: https://arxiv.org/abs/<id> and the PDF at https://arxiv.org/pdf/<id>.
 12. If a local file path is given in the question, inspect it with read_file first and never answer from memory. Use run_python for calculations over file data (pandas, absolute paths) and to execute an attached .py file (file_path argument). Always print() what you need to see.
 13. For an attached .py file, always run it with run_python(file_path=...). Never retype its code.
+14. If a local audio file path is given in the question, transcribe it with transcribe_audio first and never answer from memory.
+15. If you cannot find the answer after trying different approaches, reply FINAL ANSWER: UNKNOWN. Never invent an answer.
 """
 
 
@@ -37,6 +39,20 @@ def extract_final_answer(text: str) -> str:
 def _is_raw_tool_call(text: str) -> bool:
     """Some models print tool calls as plain text instead of using the tool-calling API."""
     return "<tool_call>" in text or "<function=" in text
+
+def _clean_assistant_message(message) -> dict:
+    """Keep only the fields every provider accepts (drops provider_specific_fields etc.)."""
+    cleaned = {"role": "assistant", "content": message.content or ""}
+    if message.tool_calls:
+        cleaned["tool_calls"] = [
+            {
+                "id": call.id,
+                "type": "function",
+                "function": {"name": call.function.name, "arguments": call.function.arguments or "{}"},
+            }
+            for call in message.tool_calls
+        ]
+    return cleaned
 
 class Agent:
     def __init__(self, tools: list | None = None):
@@ -76,8 +92,8 @@ class Agent:
                     continue
                 return extract_final_answer(content)
 
-            messages.append(message.model_dump(exclude_none=True))
-
+            messages.append(_clean_assistant_message(message))
+            
             for call in tool_calls:
                 name = call.function.name
                 try:

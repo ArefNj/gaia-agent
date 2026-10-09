@@ -9,6 +9,8 @@ from src.tools.web import WEB_TOOLS
 
 from pathlib import Path
 from src.tools.files import FILE_TOOLS
+from src.tools.audio import AUDIO_TOOLS
+from src.store import save_answer
 
 def build_prompt(question: dict, file_path, file_missing: bool = False) -> str:
     if file_path is not None:
@@ -45,7 +47,7 @@ def main():
     args = parser.parse_args()
 
     questions = get_questions(refresh=args.refresh)
-    agent = Agent(tools=WEB_TOOLS + FILE_TOOLS)
+    agent = Agent(tools=WEB_TOOLS + FILE_TOOLS + AUDIO_TOOLS)
     results = []
 
     for idx, q in select_questions(questions, args.only, args.limit, args.skip_files):
@@ -66,10 +68,11 @@ def main():
         try:
             answer, status = agent.run(build_prompt(q, file_path, file_missing), verbose=not args.quiet, preview=args.preview), "ok"
         except Exception as e:
-            answer, status = f"ERROR: {type(e).__name__}: {e}", "error"
+            answer, status = f"ERROR: {type(e).__name__}: {str(e)[:300]}", "error"
         elapsed = time.time() - start
 
         print(f"ANSWER: {answer}  ({elapsed:.1f}s)")
+        save_answer(q["task_id"], answer, status)
         results.append({
             "index": idx,
             "task_id": q["task_id"],

@@ -5,20 +5,26 @@ from litellm import Router
 
 load_dotenv()
 
-GROQ_MODEL = "groq/llama-3.3-70b-versatile"
-OPENROUTER_MODEL = "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"  
+import logging
+import litellm
 
-def _groq_deployments() -> list[dict]:
+litellm.suppress_debug_info = True
+for _name in ("LiteLLM Router", "LiteLLM"):
+    logging.getLogger(_name).setLevel(logging.CRITICAL)
+
+GROQ_MODEL = os.getenv("GROQ_MODEL", "groq/openai/gpt-oss-120b")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free")
+GROQ_MODEL_2 = os.getenv("GROQ_MODEL_2", "groq/openai/gpt-oss-20b")
+
+
+def _groq_deployments(group: str, model: str) -> list[dict]:
     deployments = []
     for i in range(1, 6):
         key = os.getenv(f"GROQ_API_KEY_{i}")
         if key:
             deployments.append({
-                "model_name": "primary",
-                "litellm_params": {
-                    "model": GROQ_MODEL,
-                    "api_key": key,
-                },
+                "model_name": group,
+                "litellm_params": {"model": model, "api_key": key},
             })
     return deployments
 
@@ -37,13 +43,18 @@ def _openrouter_deployments() -> list[dict]:
     return deployments
 
 def build_router() -> Router:
-    model_list = _groq_deployments() + _openrouter_deployments()
+    model_list = (
+        _groq_deployments("primary", GROQ_MODEL)
+        + _groq_deployments("secondary", GROQ_MODEL_2)
+        + _openrouter_deployments()
+    )
+    
     if not model_list:
         raise RuntimeError("no valid API keys found for any model. Please set GROQ_API_KEY_1..5 or OPENROUTER_API_KEY_1..5 in your environment.")
 
     return Router(
         model_list=model_list,
-        fallbacks=[{"primary": ["fallback"]}],
+        fallbacks=[{"primary": ["secondary", "fallback"]}],
         num_retries=4,          # how many times to retry a model if it fails
         timeout=60,
         routing_strategy="simple-shuffle",
